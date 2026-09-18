@@ -1,0 +1,527 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  email String @unique
+  passwordHash String
+  name String
+  username String @unique
+  role String @default("USER")
+  isSuspended Boolean @default(false)
+  emailVerifiedAt DateTime?
+  profile Profile?
+  sessions Session[]
+  passwordResetOtps PasswordResetOtp[]
+  questions Question[] @relation("QuestionAuthor")
+  answers Answer[]
+  comments Comment[]
+  answerVotes AnswerVote[]
+  bookmarks Bookmark[]
+  following UserFollow[] @relation("FollowingUser")
+  followedBy UserFollow[] @relation("FollowedUser")
+  topicFollows TopicFollow[]
+  notifications Notification[] @relation("NotificationRecipient")
+  actedNotifications Notification[] @relation("NotificationActor")
+  reports Report[] @relation("ReportReporter")
+  activities Activity[]
+  media Media[]
+  companyReviews CompanyReview[]
+  eventRsvps EventRsvp[]
+  serviceRequests ServiceRequest[]
+  savedOpportunities OpportunitySave[]
+  createdEvents CampusEvent[] @relation("CampusEventCreator")
+  listedColleges College[] @relation("CollegeListedBy")
+  collegeMemberships CollegeMembership[]
+  reportedIssues CommunityIssue[] @relation("IssueReporter")
+  issueVotes IssueVote[]
+  produceReports ProduceListing[] @relation("ProduceReporter")
+  questionVotes QuestionVote[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([createdAt])
+  @@index([role, isSuspended])
+}
+
+model Profile {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @unique @db.ObjectId
+  bio String?
+  avatarUrl String?
+  college String?
+  campus String?
+  course String?
+  profession String?
+  interests String[] @default([])
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// A college is a community-owned directory record. Anyone may submit a
+// listing; the person who submits it becomes its first college member. The
+// membership model avoids storing a fragile plain-text college value as the
+// source of truth while keeping Profile.college for older profiles.
+model College {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  name String
+  slug String @unique
+  city String
+  state String?
+  country String @default("India")
+  type String @default("UNIVERSITY")
+  website String?
+  description String?
+  aisheCode String?
+  directorySource String?
+  address String?
+  latitude Float?
+  longitude Float?
+  buildingCount Int?
+  residentLabel String?
+  coverColor String @default("indigo")
+  verified Boolean @default(false)
+  listedById String? @db.ObjectId
+  listedBy User? @relation("CollegeListedBy", fields: [listedById], references: [id])
+  members CollegeMembership[]
+  markets LocalMarket[]
+  issues CommunityIssue[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([city, createdAt])
+  @@index([name])
+  @@index([aisheCode])
+}
+
+// Nearby shops are imported from a map provider or added by a resident. Their
+// actual produce availability is deliberately stored separately and verified
+// by people in the residence, rather than invented from map metadata.
+model LocalMarket {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  collegeId String @db.ObjectId
+  externalId String?
+  name String
+  category String @default("MARKET")
+  address String?
+  latitude Float?
+  longitude Float?
+  distanceKm Float?
+  source String @default("COMMUNITY")
+  lastSyncedAt DateTime?
+  college College @relation(fields: [collegeId], references: [id])
+  produce ProduceListing[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([collegeId, createdAt])
+  @@index([externalId])
+}
+
+model ProduceListing {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  marketId String @db.ObjectId
+  reportedById String? @db.ObjectId
+  name String
+  category String
+  availability String @default("IN_STOCK")
+  priceNote String?
+  verifiedAt DateTime @default(now())
+  market LocalMarket @relation(fields: [marketId], references: [id])
+  reportedBy User? @relation("ProduceReporter", fields: [reportedById], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([marketId, category, verifiedAt])
+}
+
+// Unlike private support tickets, residence issues are visible to every
+// member. Votes reveal which problems affect the most people.
+model CommunityIssue {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  collegeId String @db.ObjectId
+  reporterId String @db.ObjectId
+  title String
+  description String
+  category String
+  severity String @default("NORMAL")
+  location String?
+  status String @default("OPEN")
+  resolvedById String? @db.ObjectId
+  resolvedAt DateTime?
+  college College @relation(fields: [collegeId], references: [id])
+  reporter User @relation("IssueReporter", fields: [reporterId], references: [id])
+  votes IssueVote[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([collegeId, status, createdAt])
+  @@index([reporterId, createdAt])
+}
+
+model IssueVote {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  issueId String @db.ObjectId
+  userId String @db.ObjectId
+  issue CommunityIssue @relation(fields: [issueId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([issueId, userId])
+  @@index([userId, createdAt])
+}
+
+model CollegeMembership {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  collegeId String @db.ObjectId
+  role String @default("STUDENT")
+  course String?
+  graduationYear Int?
+  verified Boolean @default(false)
+  user User @relation(fields: [userId], references: [id])
+  college College @relation(fields: [collegeId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, collegeId])
+  @@index([collegeId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model Session {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ipAddress String?
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([userId, expiresAt])
+}
+
+// A reset code is stored only as a bcrypt hash. A code can be used once and
+// expires quickly, so a database leak cannot be used to reset passwords.
+model PasswordResetOtp {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  codeHash String
+  attempts Int @default(0)
+  expiresAt DateTime
+  usedAt DateTime?
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model Topic {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  name String @unique
+  slug String @unique
+  description String?
+  questions QuestionTopic[]
+  followers TopicFollow[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Question {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  title String
+  slug String @unique
+  body String
+  authorId String @db.ObjectId
+  author User @relation("QuestionAuthor", fields: [authorId], references: [id])
+  topics QuestionTopic[]
+  answers Answer[]
+  comments Comment[]
+  bookmarks Bookmark[]
+  votes QuestionVote[]
+  reports Report[] @relation("QuestionReports")
+  status String @default("PUBLISHED")
+  deletedAt DateTime?
+  viewCount Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([authorId, createdAt])
+  @@index([status, createdAt])
+}
+
+model QuestionVote {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  questionId String @db.ObjectId
+  user User @relation(fields: [userId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, questionId])
+  @@index([questionId, createdAt])
+}
+
+model QuestionTopic {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  questionId String @db.ObjectId
+  topicId String @db.ObjectId
+  question Question @relation(fields: [questionId], references: [id])
+  topic Topic @relation(fields: [topicId], references: [id])
+  @@unique([questionId, topicId])
+  @@index([topicId, questionId])
+}
+
+model Answer {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  questionId String @db.ObjectId
+  authorId String @db.ObjectId
+  body String
+  accepted Boolean @default(false)
+  status String @default("PUBLISHED")
+  deletedAt DateTime?
+  question Question @relation(fields: [questionId], references: [id])
+  author User @relation(fields: [authorId], references: [id])
+  votes AnswerVote[]
+  comments Comment[]
+  reports Report[] @relation("AnswerReports")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([questionId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model Comment {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  body String
+  authorId String @db.ObjectId
+  questionId String? @db.ObjectId
+  answerId String? @db.ObjectId
+  parentId String? @db.ObjectId
+  status String @default("PUBLISHED")
+  deletedAt DateTime?
+  author User @relation(fields: [authorId], references: [id])
+  question Question? @relation(fields: [questionId], references: [id])
+  answer Answer? @relation(fields: [answerId], references: [id])
+  parent Comment? @relation("CommentReplies", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies Comment[] @relation("CommentReplies")
+  reports Report[] @relation("CommentReports")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([questionId, createdAt])
+  @@index([answerId, createdAt])
+  @@index([parentId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model AnswerVote {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  answerId String @db.ObjectId
+  user User @relation(fields: [userId], references: [id])
+  answer Answer @relation(fields: [answerId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, answerId])
+  @@index([answerId, createdAt])
+}
+
+model Bookmark {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  questionId String @db.ObjectId
+  user User @relation(fields: [userId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, questionId])
+  @@index([questionId])
+}
+
+model UserFollow {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  followerId String @db.ObjectId
+  followingId String @db.ObjectId
+  follower User @relation("FollowingUser", fields: [followerId], references: [id])
+  following User @relation("FollowedUser", fields: [followingId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([followerId, followingId])
+  @@index([followingId, createdAt])
+}
+
+model TopicFollow {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  topicId String @db.ObjectId
+  user User @relation(fields: [userId], references: [id])
+  topic Topic @relation(fields: [topicId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, topicId])
+  @@index([topicId, createdAt])
+}
+
+model Notification {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  actorId String? @db.ObjectId
+  type String
+  entityId String?
+  message String
+  readAt DateTime?
+  user User @relation("NotificationRecipient", fields: [userId], references: [id])
+  actor User? @relation("NotificationActor", fields: [actorId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([userId, readAt, createdAt])
+}
+
+model Report {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  reporterId String @db.ObjectId
+  questionId String? @db.ObjectId
+  answerId String? @db.ObjectId
+  commentId String? @db.ObjectId
+  reason String
+  status String @default("OPEN")
+  resolvedBy String?
+  resolvedAt DateTime?
+  reporter User @relation("ReportReporter", fields: [reporterId], references: [id])
+  question Question? @relation("QuestionReports", fields: [questionId], references: [id])
+  answer Answer? @relation("AnswerReports", fields: [answerId], references: [id])
+  comment Comment? @relation("CommentReports", fields: [commentId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, createdAt])
+  @@index([reporterId, createdAt])
+}
+
+model Activity {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  type String
+  entityId String?
+  metadata Json?
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
+model Media {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  key String @unique
+  url String
+  mimeType String
+  size Int
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+}
+
+model CampusEvent {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  title String
+  description String
+  location String
+  startsAt DateTime
+  endsAt DateTime?
+  capacity Int?
+  kind String
+  coverColor String @default("violet")
+  createdById String? @db.ObjectId
+  createdBy User? @relation("CampusEventCreator", fields: [createdById], references: [id])
+  rsvps EventRsvp[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([startsAt])
+  @@index([kind, startsAt])
+}
+
+model EventRsvp {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  eventId String @db.ObjectId
+  status String @default("GOING")
+  user User @relation(fields: [userId], references: [id])
+  event CampusEvent @relation(fields: [eventId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, eventId])
+  @@index([eventId, status])
+}
+
+model ServiceRequest {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  title String
+  description String
+  category String
+  location String?
+  status String @default("OPEN")
+  user User @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Company {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  name String @unique
+  slug String @unique
+  industry String
+  location String
+  website String?
+  description String
+  logoColor String @default("indigo")
+  reviews CompanyReview[]
+  jobs CareerOpportunity[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CompanyReview {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String @db.ObjectId
+  authorId String @db.ObjectId
+  rating Int
+  title String
+  pros String
+  cons String?
+  role String?
+  isAnonymous Boolean @default(false)
+  status String @default("PUBLISHED")
+  company Company @relation(fields: [companyId], references: [id])
+  author User @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([companyId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model CareerOpportunity {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  companyId String? @db.ObjectId
+  title String
+  location String
+  employmentType String
+  stipend String?
+  description String
+  skills String[] @default([])
+  applicationUrl String?
+  deadline DateTime?
+  status String @default("OPEN")
+  company Company? @relation(fields: [companyId], references: [id])
+  saves OpportunitySave[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, createdAt])
+  @@index([companyId, status])
+  @@index([employmentType, status])
+}
+
+model OpportunitySave {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  opportunityId String @db.ObjectId
+  user User @relation(fields: [userId], references: [id])
+  opportunity CareerOpportunity @relation(fields: [opportunityId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, opportunityId])
+  @@index([opportunityId])
+}
