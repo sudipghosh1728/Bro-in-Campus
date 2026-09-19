@@ -4,6 +4,71 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 const day = (offset: number, hour: number) => { const value = new Date(); value.setDate(value.getDate() + offset); value.setHours(hour, 0, 0, 0); return value; };
 
+/**
+ * MongoDB deliberately does not enforce foreign keys. If a development user is
+ * removed directly in Atlas, its authored documents can outlive it and Prisma
+ * will correctly reject those broken required relations. The seed is the
+ * development recovery path: preserve authored content under the restored demo
+ * account and remove relationship-only records that cannot be safely reassigned.
+ */
+async function repairOrphanedUserReferences(restoredUserId: string) {
+  const [users, questions, answers, comments, reviews, events, serviceRequests, issues, produce, activities, media, notifications, reports, colleges] = await Promise.all([
+    prisma.user.findMany({ select: { id: true } }),
+    prisma.question.findMany({ select: { authorId: true } }),
+    prisma.answer.findMany({ select: { authorId: true } }),
+    prisma.comment.findMany({ select: { authorId: true } }),
+    prisma.companyReview.findMany({ select: { authorId: true } }),
+    prisma.campusEvent.findMany({ select: { createdById: true } }),
+    prisma.serviceRequest.findMany({ select: { userId: true } }),
+    prisma.communityIssue.findMany({ select: { reporterId: true } }),
+    prisma.produceListing.findMany({ select: { reportedById: true } }),
+    prisma.activity.findMany({ select: { userId: true } }),
+    prisma.media.findMany({ select: { userId: true } }),
+    prisma.notification.findMany({ select: { userId: true, actorId: true } }),
+    prisma.report.findMany({ select: { reporterId: true } }),
+    prisma.college.findMany({ select: { listedById: true } }),
+  ]);
+  const knownUserIds = new Set(users.map((user) => user.id));
+  const referencedIds = [
+    ...questions.map((item) => item.authorId), ...answers.map((item) => item.authorId), ...comments.map((item) => item.authorId), ...reviews.map((item) => item.authorId),
+    ...events.map((item) => item.createdById), ...serviceRequests.map((item) => item.userId), ...issues.map((item) => item.reporterId), ...produce.map((item) => item.reportedById),
+    ...activities.map((item) => item.userId), ...media.map((item) => item.userId), ...notifications.flatMap((item) => [item.userId, item.actorId]), ...reports.map((item) => item.reporterId), ...colleges.map((item) => item.listedById),
+  ].filter((value): value is string => Boolean(value));
+  const orphanIds = [...new Set(referencedIds.filter((id) => !knownUserIds.has(id)))];
+  if (!orphanIds.length) return;
+
+  await Promise.all([
+    // Preserve authored content rather than silently losing it.
+    prisma.question.updateMany({ where: { authorId: { in: orphanIds } }, data: { authorId: restoredUserId } }),
+    prisma.answer.updateMany({ where: { authorId: { in: orphanIds } }, data: { authorId: restoredUserId } }),
+    prisma.comment.updateMany({ where: { authorId: { in: orphanIds } }, data: { authorId: restoredUserId } }),
+    prisma.companyReview.updateMany({ where: { authorId: { in: orphanIds } }, data: { authorId: restoredUserId } }),
+    prisma.campusEvent.updateMany({ where: { createdById: { in: orphanIds } }, data: { createdById: restoredUserId } }),
+    prisma.serviceRequest.updateMany({ where: { userId: { in: orphanIds } }, data: { userId: restoredUserId } }),
+    prisma.communityIssue.updateMany({ where: { reporterId: { in: orphanIds } }, data: { reporterId: restoredUserId } }),
+    prisma.produceListing.updateMany({ where: { reportedById: { in: orphanIds } }, data: { reportedById: restoredUserId } }),
+    prisma.activity.updateMany({ where: { userId: { in: orphanIds } }, data: { userId: restoredUserId } }),
+    prisma.media.updateMany({ where: { userId: { in: orphanIds } }, data: { userId: restoredUserId } }),
+    prisma.notification.updateMany({ where: { userId: { in: orphanIds } }, data: { userId: restoredUserId } }),
+    prisma.notification.updateMany({ where: { actorId: { in: orphanIds } }, data: { actorId: restoredUserId } }),
+    prisma.report.updateMany({ where: { reporterId: { in: orphanIds } }, data: { reporterId: restoredUserId } }),
+    prisma.college.updateMany({ where: { listedById: { in: orphanIds } }, data: { listedById: restoredUserId } }),
+    // Relationship records cannot be reassigned without risking unique-key collisions.
+    prisma.profile.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.session.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.passwordResetOtp.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.userFollow.deleteMany({ where: { OR: [{ followerId: { in: orphanIds } }, { followingId: { in: orphanIds } }] } }),
+    prisma.topicFollow.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.answerVote.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.questionVote.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.bookmark.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.eventRsvp.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.issueVote.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.opportunitySave.deleteMany({ where: { userId: { in: orphanIds } } }),
+    prisma.collegeMembership.deleteMany({ where: { userId: { in: orphanIds } } }),
+  ]);
+}
+
 async function main() {
   const demo = await prisma.user.upsert({
     where: { email: "meera@broincampus.dev" },
@@ -11,6 +76,7 @@ async function main() {
     create: { name: "Meera Nair", username: "meera_nair", email: "meera@broincampus.dev", passwordHash: await bcrypt.hash("Campus123!", 12), profile: { create: { campus: "North Campus", course: "Computer Science" } } },
   });
   await prisma.profile.upsert({ where: { userId: demo.id }, create: { userId: demo.id, campus: "North Campus", course: "Computer Science" }, update: { college: null } });
+  await repairOrphanedUserReferences(demo.id);
   const topicDefinitions = [
     ["Placements", "Placement preparation, companies and interviews."], ["Internships", "Internship search and work experience."], ["Academics", "Courses, faculty and study strategies."], ["Hostel life", "Everyday hostel advice and updates."], ["Clubs & events", "Student clubs, fests and campus events."], ["Campus help", "Services, transport and getting things fixed."],
   ];
