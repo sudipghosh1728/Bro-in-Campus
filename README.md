@@ -37,3 +37,27 @@ Map data identifies locations and distance, not live shop inventory. Availabilit
 ## Brand asset
 
 The supplied Bro in Campus logo lives at `public/brand/bro-in-campus-logo.png`. The shared `BrandLogo` component presents this original file consistently across the interface without redrawing it.
+
+## Deploy to Vercel
+
+Import this repository into Vercel with the **Next.js** preset and the repository root as the root directory. Use `npm install` and `npm run build`; Prisma Client is generated automatically. Alternatively, run `vercel login`, `vercel link`, and `vercel --prod` from this directory.
+
+Before deploying, add these values in the project's **Settings → Environment Variables** for Production (and separately for Preview if needed):
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | MongoDB Atlas connection string with a database name; allow connections from the deployment in Atlas network settings. |
+| `AUTH_SECRET` | Private random value of at least 32 characters. Keep the same value across production instances. |
+| `GMAIL_USER` | Gmail account used to send password-reset codes. |
+| `GMAIL_APP_PASSWORD` | That account's Google App Password; required for password recovery. |
+| `GMAIL_FROM` | Optional sender; defaults to `GMAIL_USER`. |
+| `LOCATION_USER_AGENT` | Application name and a real contact address for market discovery. |
+| `NEXT_PUBLIC_GOOGLE_MAPS_EMBED_API_KEY` | Optional browser-restricted key; OpenStreetMap works without it. |
+
+Local `.env` files are excluded from deployment uploads. Never paste secret values into source files or commit them. Redeploy after changing environment variables.
+
+For a new database, run `npm run db:push` with its `DATABASE_URL` configured to create the schema/indexes. MongoDB uses `db push`, not Prisma Migrate. Do not run the demo seed against production: it creates a publicly documented demo login. Schema changes are deliberately separate from builds.
+
+Active pages refresh persisted data every 30 seconds and when the browser reconnects or becomes visible. This works across Vercel instances without a persistent SSE connection. The legacy `/api/realtime` endpoint is only a process-local event stream; deployed clients do not depend on it. Request throttling remains process-local, so it is not a distributed abuse limit.
+
+After deployment, verify registration, sign-in/sign-out, a question and answer, campus membership, notifications, and password-reset email on the production URL. A successful build alone does not verify database network access or email delivery from Vercel.

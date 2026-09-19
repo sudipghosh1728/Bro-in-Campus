@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { subscribeToRefresh } from "@/lib/live-refresh";
 import { ArrowRight, Filter, Search, Sparkles, UserPlus } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/client-api";
@@ -36,10 +37,7 @@ export function DiscoverClient({ initialData, user, initialFilters }: { initialD
   }, [activeTopic, query, sort]);
 
   useEffect(() => {
-    const stream = new EventSource("/api/realtime");
-    const refresh = () => load(false);
-    ["QUESTION_CREATED", "QUESTION_LIKED", "QUESTION_UNLIKED", "ANSWER_CREATED", "ANSWER_UPDATED", "ANSWER_DELETED", "UPVOTE_CREATED", "UPVOTE_REMOVED", "COMMENT_CREATED"].forEach((event) => stream.addEventListener(event, refresh));
-    return () => stream.close();
+    return subscribeToRefresh(() => load(false));
   }, [load]);
 
   useEffect(() => { if (initialFilters.focusSearch) searchInput.current?.focus(); }, [initialFilters.focusSearch]);

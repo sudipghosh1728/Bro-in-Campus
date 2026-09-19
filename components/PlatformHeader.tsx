@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { subscribeToRefresh } from "@/lib/live-refresh";
 import { Bell, LogOut, Menu, MessageCircleQuestion, Search, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -20,9 +21,7 @@ export function PlatformHeader({ user }: { user: Viewer }) {
       if (response.ok) setUnread((await response.json()).data.unreadCount);
     };
     load();
-    const stream = new EventSource("/api/realtime");
-    stream.addEventListener("NOTIFICATION_CREATED", load);
-    return () => stream.close();
+    return subscribeToRefresh(load);
   }, [user]);
 
   async function logout() {

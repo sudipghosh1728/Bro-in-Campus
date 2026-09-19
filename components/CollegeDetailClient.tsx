@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { subscribeToRefresh } from "@/lib/live-refresh";
 import { Apple, ArrowLeft, BriefcaseBusiness, CalendarDays, Check, CheckCircle2, CircleAlert, ExternalLink, GraduationCap, MapPin, MessageCircleQuestion, Plus, RefreshCw, ShieldCheck, ThumbsUp, UserPlus, UsersRound, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -55,10 +56,7 @@ export function CollegeDetailClient({ initialCollege, initialLiving, user }: { i
   const refreshLiving = useCallback(async () => { setLiving(await api<LivingData>(`/api/colleges/${college.id}/markets`)); }, [college.id]);
 
   useEffect(() => {
-    const stream = new EventSource("/api/realtime");
-    const refresh = () => { refreshLiving().catch(() => undefined); };
-    ["MARKETS_SYNCED", "MARKET_CREATED", "PRODUCE_REPORTED", "ISSUE_CREATED", "ISSUE_SUPPORTED", "ISSUE_UNSUPPORTED", "ISSUE_RESOLVED"].forEach((event) => stream.addEventListener(event, refresh));
-    return () => stream.close();
+    return subscribeToRefresh(refreshLiving);
   }, [refreshLiving]);
 
   async function toggleMembership() {

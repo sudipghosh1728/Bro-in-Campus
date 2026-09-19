@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { subscribeToRefresh } from "@/lib/live-refresh";
 import { Bookmark, CheckCircle2, Flag, MessageCircle, Pencil, Send, ThumbsUp, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -39,7 +40,8 @@ function AnswerCard({ answer, question, user, onChanged }: { answer: AnswerItem;
   const ownQuestion = user?.id === question.author.id;
   const ownAnswer = user?.id === answer.author.id;
 
-  useEffect(() => { setUpvoted(answer.upvoted); setCount(answer.upvoteCount); setDraft(answer.body); }, [answer]);
+  useEffect(() => { setUpvoted(answer.upvoted); setCount(answer.upvoteCount); }, [answer.upvoted, answer.upvoteCount]);
+  useEffect(() => { if (!editing) setDraft(answer.body); }, [answer.body, editing]);
 
   async function vote() {
     if (!user) return router.push(`/login?next=/questions/${question.slug}`);
@@ -108,8 +110,9 @@ export function QuestionDetailClient({ initialQuestion, user }: { initialQuestio
   const ownQuestion = user?.id === question.author.id;
   const refresh = () => router.refresh();
 
-  useEffect(() => { setQuestion(initialQuestion); setBookmarked(initialQuestion.bookmarked); setDraftTitle(initialQuestion.title); setDraftBody(initialQuestion.body); }, [initialQuestion]);
-  useEffect(() => { const stream = new EventSource("/api/realtime"); const refreshAnswer = (event: MessageEvent) => { try { if (JSON.parse(event.data).questionId === question.id) refresh(); } catch { /* malformed events are ignored */ } }; ["QUESTION_CREATED", "ANSWER_CREATED", "ANSWER_UPDATED", "ANSWER_DELETED", "COMMENT_CREATED", "UPVOTE_CREATED", "UPVOTE_REMOVED"].forEach((type) => stream.addEventListener(type, refreshAnswer)); return () => stream.close(); }, [question.id]);
+  useEffect(() => { setQuestion(initialQuestion); setBookmarked(initialQuestion.bookmarked); }, [initialQuestion]);
+  useEffect(() => { if (!editing) { setDraftTitle(initialQuestion.title); setDraftBody(initialQuestion.body); } }, [initialQuestion.title, initialQuestion.body, editing]);
+  useEffect(() => subscribeToRefresh(refresh), [question.id]);
   async function submitAnswer(event: FormEvent) { event.preventDefault(); if (!user) return router.push(`/login?next=/questions/${question.slug}`); setAnswering(true); setMessage(""); try { await api(`/api/questions/${question.id}/answers`, { method: "POST", body: JSON.stringify({ body }) }); setBody(""); refresh(); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "Could not post answer."); } finally { setAnswering(false); } }
   async function submitComment(event: FormEvent) { event.preventDefault(); if (!user) return router.push("/login"); setMessage(""); try { await api(`/api/questions/${question.id}/comments`, { method: "POST", body: JSON.stringify({ body: comment }) }); setComment(""); refresh(); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "Could not add comment."); } }
   async function toggleBookmark() { if (!user) return router.push("/login"); const next = !bookmarked; setBookmarked(next); try { await api(`/api/questions/${question.id}/bookmark`, { method: next ? "POST" : "DELETE" }); } catch (reason) { setBookmarked(!next); setMessage(reason instanceof Error ? reason.message : "Could not update saved item."); } }

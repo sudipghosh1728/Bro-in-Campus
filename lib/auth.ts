@@ -8,9 +8,13 @@ import { Role, type Role as RoleValue } from "./domain";
 
 const SESSION_COOKIE = "bic_session";
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
-const secret = new TextEncoder().encode(
-  process.env.AUTH_SECRET || "development-only-secret-change-before-deployment",
-);
+function sessionSecret() {
+  const value = process.env.AUTH_SECRET;
+  if (process.env.NODE_ENV === "production" && (!value || value.length < 32 || value.startsWith("replace-with"))) {
+    throw new Error("AUTH_SECRET must contain at least 32 private random characters in production.");
+  }
+  return new TextEncoder().encode(value || "development-only-secret-change-before-deployment");
+}
 
 type SessionPayload = { sub: string; sid: string; role: RoleValue };
 
@@ -25,13 +29,13 @@ async function signSession(payload: SessionPayload) {
     .setSubject(payload.sub)
     .setIssuedAt()
     .setExpirationTime("30d")
-    .sign(secret);
+    .sign(sessionSecret());
 }
 
 async function verifySession(token?: string): Promise<SessionPayload | null> {
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, sessionSecret());
     if (typeof payload.sub !== "string" || typeof payload.sid !== "string") return null;
     if (payload.role !== "USER" && payload.role !== "MODERATOR" && payload.role !== "ADMIN") return null;
     return { sub: payload.sub, sid: payload.sid, role: payload.role };

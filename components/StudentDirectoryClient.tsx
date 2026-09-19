@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { subscribeToRefresh } from "@/lib/live-refresh";
 import { GraduationCap, Search, UsersRound } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -44,11 +45,8 @@ export function StudentDirectoryClient({ initialData, user, initialQuery }: { in
   function search(event: FormEvent) { event.preventDefault(); void load(query, true); }
 
   useEffect(() => {
-    const stream = new EventSource("/api/realtime");
-    const refreshMemberships = () => { void load(query); };
-    stream.addEventListener("COLLEGE_MEMBERSHIP_CHANGED", refreshMemberships);
-    return () => stream.close();
-  // Membership changes are the only background event for this directory.
+    return subscribeToRefresh(() => load(query));
+  // Refresh the current directory query across server instances.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);
 
