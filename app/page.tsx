@@ -15,5 +15,10 @@ export default async function Home() {
       <section className="home-grid"><Link className="hub-card hub-card--campus" href="/colleges"><span className="hub-icon"><Building2 size={22} /></span><p className="section-kicker">Campus</p><h2>Every shared home<br /><em>has a front door.</em></h2><p>{colleges.colleges[0] ? `${colleges.colleges[0].name} is already in the directory.` : "List your college, hostel or society and start its living hub."}</p><small>{colleges.colleges.length} campuses listed <ArrowRight size={15} /></small></Link><Link className="hub-card hub-card--career" href="/students"><span className="hub-icon"><GraduationCap size={22} /></span><p className="section-kicker">People</p><h2>Find neighbours<br /><em>who understand.</em></h2><p>{students.students[0] ? `${students.students[0].name} is building their local circle.` : "Join a campus to show up in the people directory."}</p><small>{students.students.length} people to know <ArrowRight size={15} /></small></Link><Link className="hub-card hub-card--community" href="/community"><span className="hub-icon"><MessageCircleQuestion size={22} /></span><p className="section-kicker">Community</p><h2>Make one problem<br /><em>visible to all.</em></h2><p>{community.questions[0]?.title ?? "Shared questions and updates will show up here."}</p><small>{community.questions.length} active discussions <ArrowRight size={15} /></small></Link></section>
       <section className="home-bottom"><div><p className="section-kicker">Useful context, not a static case study</p><h2>Designed for the life between rooms.</h2><p>Place membership, local-market distance, community availability reports, shared issues and conversations are backed by live MongoDB data and actions.</p></div><div className="home-bottom__stats"><span><b>{community.topics.length}</b> topics to follow</span><span><b>{campus.events.length}</b> local events</span><span><b>{campus.support.open}</b> requests being tracked</span></div></section>
     </main>;
-  } catch { return <DatabaseRequired />; }
+  } catch (error) {
+    // Kept server-side: this makes an unavailable Atlas connection observable in
+    // Vercel logs without leaking operational details into the browser.
+    console.error("Home data load failed", error);
+    return <DatabaseRequired />;
+  }
 }
