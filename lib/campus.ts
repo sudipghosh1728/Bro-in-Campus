@@ -1,6 +1,9 @@
 import { ApiError } from "./api";
+import { assessPublicContent } from "./content-safety";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { publishPublic } from "./realtime";
+import { slugify } from "./slug";
 import type { CurrentUser } from "./auth";
 import { ContentStatus, EventRsvpStatus, OpportunityStatus, ServiceRequestStatus } from "./domain";
 
@@ -33,6 +36,7 @@ function eventSummary(event: {
     coverColor: event.coverColor,
     goingCount: event._count.rsvps,
     rsvpStatus: (event.rsvps[0]?.status === "GOING" || event.rsvps[0]?.status === "WAITLISTED" ? event.rsvps[0].status : null) as "GOING" | "WAITLISTED" | null,
+    timeline: (event.startsAt > new Date() ? "UPCOMING" : !event.endsAt || event.endsAt >= new Date() ? "LIVE" : "PAST") as "UPCOMING" | "LIVE" | "PAST",
   };
 }
 
@@ -83,6 +87,17 @@ export async function toggleEventRsvp(user: CurrentUser, eventId: string, should
   const status = existing?.status === EventRsvpStatus.GOING || event.capacity === null || goingCount < event.capacity ? EventRsvpStatus.GOING : EventRsvpStatus.WAITLISTED;
   await prisma.eventRsvp.upsert({ where: { userId_eventId: { userId: user.id, eventId } }, create: { userId: user.id, eventId, status }, update: { status } });
   return { attending: true, rsvpStatus: status, goingCount: goingCount + (existing?.status === EventRsvpStatus.GOING || status !== EventRsvpStatus.GOING ? 0 : 1) };
+}
+
+export async function createCampusEvent(user: CurrentUser, input: { title: string; description: string; location: string; startsAt: Date; endsAt?: Date | null; capacity?: number | null; kind: string; coverColor: string }) {
+  const safety = assessPublicContent([input.title, input.description, input.location]);
+  if (!safety.allowed) {
+    await prisma.contentModeration.create({ data: { userId: user.id, contentType: "CAMPUS_EVENT", decision: "BLOCKED", categories: safety.categories } });
+    throw new ApiError(422, "CONTENT_BLOCKED", "This submission was blocked by the community safety policy and was not published.");
+  }
+  const event = await prisma.campusEvent.create({ data: { ...input, endsAt: input.endsAt ?? null, capacity: input.capacity ?? null, createdById: user.id } });
+  publishPublic({ type: "CAMPUS_EVENT_CREATED", payload: { eventId: event.id } });
+  return { id: event.id };
 }
 
 export async function createServiceRequest(user: CurrentUser, input: { title: string; description: string; category: "MAINTENANCE" | "HOSTEL" | "TRANSPORT" | "IT" | "ACADEMIC" | "OTHER"; location?: string }) {
@@ -145,6 +160,43 @@ export async function createCompanyReview(user: CurrentUser, companyId: string, 
   if (!company) throw new ApiError(404, "NOT_FOUND", "Company not found.");
   const review = await prisma.companyReview.create({ data: { ...input, cons: input.cons || null, role: input.role || null, isAnonymous: input.isAnonymous ?? false, companyId, authorId: user.id } });
   return { id: review.id };
+}
+
+async function companyForOpportunity(input: { companyName: string; companyIndustry: string; companyLocation: string; companyWebsite?: string }) {
+  const existing = await prisma.company.findUnique({ where: { name: input.companyName }, select: { id: true } });
+  if (existing) return existing;
+  const base = slugify(input.companyName);
+  let slug = base;
+  let suffix = 2;
+  while (await prisma.company.findUnique({ where: { slug }, select: { id: true } })) {
+    slug = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return prisma.company.create({
+    data: {
+      name: input.companyName, slug, industry: input.companyIndustry, location: input.companyLocation,
+      website: input.companyWebsite || null, logoColor: "slate", description: "Employer profile created with a campus opportunity listing.",
+    },
+    select: { id: true },
+  });
+}
+
+export async function createCareerOpportunity(user: CurrentUser, input: { companyName: string; companyIndustry: string; companyLocation: string; companyWebsite?: string; title: string; location: string; employmentType: string; stipend?: string; description: string; skills: string[]; applicationUrl?: string; deadline?: Date | null }) {
+  if (user.role === "USER" && user.profile?.profession !== "HR") throw new ApiError(403, "EMPLOYER_PROFILE_REQUIRED", "Set your profile profession to HR / employer before publishing an opportunity.");
+  const safety = assessPublicContent([input.companyName, input.title, input.description, input.location]);
+  if (!safety.allowed) {
+    await prisma.contentModeration.create({ data: { userId: user.id, contentType: "CAREER_OPPORTUNITY", decision: "BLOCKED", categories: safety.categories } });
+    throw new ApiError(422, "CONTENT_BLOCKED", "This submission was blocked by the community safety policy and was not published.");
+  }
+  const company = await companyForOpportunity(input);
+  const opportunity = await prisma.careerOpportunity.create({
+    data: {
+      companyId: company.id, postedById: user.id, title: input.title, location: input.location, employmentType: input.employmentType,
+      stipend: input.stipend || null, description: input.description, skills: input.skills, applicationUrl: input.applicationUrl || null, deadline: input.deadline ?? null,
+    },
+  });
+  publishPublic({ type: "CAREER_OPPORTUNITY_CREATED", payload: { opportunityId: opportunity.id } });
+  return { id: opportunity.id };
 }
 
 export async function toggleOpportunitySave(user: CurrentUser, opportunityId: string, shouldSave: boolean) {

@@ -3,7 +3,7 @@ export type Role = (typeof Role)[keyof typeof Role];
 
 // Profession describes how a person participates in a campus community. It is
 // deliberately separate from the platform-wide moderation role above.
-export const Profession = { STUDENT: "STUDENT", TEACHER: "TEACHER", AUTHORITY: "AUTHORITY", ADMINISTRATION: "ADMINISTRATION", RESIDENT: "RESIDENT" } as const;
+export const Profession = { STUDENT: "STUDENT", TEACHER: "TEACHER", AUTHORITY: "AUTHORITY", ADMINISTRATION: "ADMINISTRATION", HR: "HR", RESIDENT: "RESIDENT" } as const;
 export type Profession = (typeof Profession)[keyof typeof Profession];
 export const IssueManagerProfessions = [Profession.TEACHER, Profession.AUTHORITY, Profession.ADMINISTRATION] as const;
 

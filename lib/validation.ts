@@ -16,7 +16,7 @@ export const registerSchema = z.object({
   username,
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
   password: z.string().min(8, "Password must be at least 8 characters.").max(128),
-  profession: z.enum(["STUDENT", "TEACHER", "AUTHORITY", "ADMINISTRATION", "RESIDENT"]),
+  profession: z.enum(["STUDENT", "TEACHER", "AUTHORITY", "ADMINISTRATION", "HR", "RESIDENT"]),
 });
 
 export const loginSchema = z.object({
@@ -41,7 +41,7 @@ export const profileSchema = z.object({
   campus: z.string().trim().max(120).nullable().optional(),
   course: z.string().trim().max(120).nullable().optional(),
   interests: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
-  profession: z.enum(["STUDENT", "TEACHER", "AUTHORITY", "ADMINISTRATION", "RESIDENT"]).optional(),
+  profession: z.enum(["STUDENT", "TEACHER", "AUTHORITY", "ADMINISTRATION", "HR", "RESIDENT"]).optional(),
 });
 
 export const questionSchema = z.object({
@@ -80,6 +80,37 @@ export const serviceRequestSchema = z.object({
   description: z.string().trim().min(15).max(5000),
   category: z.enum(["MAINTENANCE", "HOSTEL", "TRANSPORT", "IT", "ACADEMIC", "OTHER"]),
   location: z.string().trim().max(160).optional(),
+});
+
+export const campusEventSchema = z.object({
+  title: z.string().trim().min(6).max(180),
+  description: z.string().trim().min(15).max(5000),
+  location: z.string().trim().min(2).max(180),
+  startsAt: z.coerce.date(),
+  endsAt: z.coerce.date().optional().nullable(),
+  capacity: z.number().int().min(1).max(100000).optional().nullable(),
+  kind: z.enum(["WORKSHOP", "FEST", "SPORTS", "CAREER", "CULTURAL", "CLUB", "OTHER"]),
+  coverColor: z.enum(["violet", "coral", "mint", "yellow", "indigo"]).default("violet"),
+}).refine((input) => !input.endsAt || input.endsAt > input.startsAt, { message: "End time must be after the start time.", path: ["endsAt"] });
+
+export const careerOpportunitySchema = z.object({
+  companyName: z.string().trim().min(2).max(120),
+  companyIndustry: z.string().trim().min(2).max(120),
+  companyLocation: z.string().trim().min(2).max(120),
+  companyWebsite: z.string().trim().url().max(300).optional().or(z.literal("")),
+  title: z.string().trim().min(4).max(180),
+  location: z.string().trim().min(2).max(160),
+  employmentType: z.enum(["INTERNSHIP", "FULL_TIME", "PART_TIME", "APPRENTICESHIP"]),
+  stipend: z.string().trim().max(120).optional().or(z.literal("")),
+  description: z.string().trim().min(30).max(5000),
+  skills: z.array(z.string().trim().min(1).max(50)).min(1).max(12),
+  applicationUrl: z.string().trim().url().max(300).optional().or(z.literal("")),
+  deadline: z.coerce.date().optional().nullable(),
+});
+
+export const newsletterSubscriptionSchema = z.object({
+  email: z.string().trim().email("Enter a valid email address.").max(254).transform((email) => email.toLowerCase()),
+  interests: z.array(z.enum(["EDUCATION", "ECONOMY", "ENGINEERING", "TECHNOLOGY", "CAREERS", "SCHOLARSHIPS"])).max(6).default(["EDUCATION", "TECHNOLOGY", "CAREERS"]),
 });
 
 export const companyReviewSchema = z.object({

@@ -7,7 +7,7 @@ export default async function CareersPage() {
   try {
     const currentUser = await getCurrentUser();
     const data = await getCareerDirectory(currentUser);
-    const user = currentUser ? { id: currentUser.id, name: currentUser.name, username: currentUser.username, role: currentUser.role, avatarUrl: currentUser.profile?.avatarUrl ?? null } : null;
+    const user = currentUser ? { id: currentUser.id, name: currentUser.name, username: currentUser.username, role: currentUser.role, avatarUrl: currentUser.profile?.avatarUrl ?? null, profession: currentUser.profile?.profession ?? null } : null;
     return <CareerClient initialData={data} user={user} />;
   } catch { return <DatabaseRequired />; }
 }

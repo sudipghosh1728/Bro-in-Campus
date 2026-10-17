@@ -35,6 +35,7 @@ export function PlatformHeader({ user }: { user: Viewer }) {
     ["Campus", "/colleges"],
     ["People", "/students"],
     ["Community", "/community"],
+    ["Learn", "/learn"],
   ];
   return <header className="app-header">
     <div className="app-header__inner">

@@ -36,10 +36,12 @@ model User {
   eventRsvps EventRsvp[]
   serviceRequests ServiceRequest[]
   savedOpportunities OpportunitySave[]
+  postedOpportunities CareerOpportunity[] @relation("OpportunityPoster")
   createdEvents CampusEvent[] @relation("CampusEventCreator")
   listedColleges College[] @relation("CollegeListedBy")
   collegeMemberships CollegeMembership[]
   reportedIssues CommunityIssue[] @relation("IssueReporter")
+  contentModerationEvents ContentModeration[]
   issueVotes IssueVote[]
   produceReports ProduceListing[] @relation("ProduceReporter")
   questionVotes QuestionVote[]
@@ -150,6 +152,10 @@ model CommunityIssue {
   severity String @default("NORMAL")
   location String?
   status String @default("OPEN")
+  isAnonymous Boolean @default(true)
+  moderationStatus String? @default("APPROVED")
+  moderationReason String?
+  removedAt DateTime?
   resolvedById String? @db.ObjectId
   resolvedAt DateTime?
   college College @relation(fields: [collegeId], references: [id])
@@ -158,7 +164,102 @@ model CommunityIssue {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([collegeId, status, createdAt])
+  @@index([collegeId, moderationStatus, createdAt])
   @@index([reporterId, createdAt])
+}
+
+// Safety decisions record only metadata, never a rejected submission's text.
+// This enables operational review without retaining prohibited content.
+model ContentModeration {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String? @db.ObjectId
+  contentType String
+  contentId String?
+  decision String
+  categories String[] @default([])
+  createdAt DateTime @default(now())
+  user User? @relation(fields: [userId], references: [id])
+  @@index([contentType, decision, createdAt])
+  @@index([userId, createdAt])
+}
+
+// Curriculum and student-growth content is kept as its own data layer so it
+// can evolve independently from a particular college listing.
+model Department {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  name String
+  slug String @unique
+  synopsis String
+  focusAreas String[] @default([])
+  accent String @default("indigo")
+  demandSignal Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([demandSignal, name])
+}
+
+model LearningPath {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  title String
+  slug String @unique
+  departmentSlug String
+  level String @default("FOUNDATION")
+  duration String
+  description String
+  skills String[] @default([])
+  milestones Json
+  trendScore Int @default(0)
+  featured Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([departmentSlug, trendScore])
+  @@index([featured, trendScore])
+}
+
+model Scholarship {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  title String
+  slug String @unique
+  provider String
+  description String
+  amount String?
+  eligibility String
+  categories String[] @default([])
+  applicationUrl String?
+  deadline DateTime?
+  featured Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([featured, deadline])
+  @@index([categories, deadline])
+}
+
+model NewsBriefing {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  title String
+  slug String @unique
+  summary String
+  category String
+  sourceName String
+  sourceUrl String?
+  publishedAt DateTime
+  featured Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([category, publishedAt])
+  @@index([featured, publishedAt])
+}
+
+model NewsletterSubscription {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  email String @unique
+  userId String? @db.ObjectId
+  interests String[] @default([])
+  status String @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+  @@index([status, updatedAt])
 }
 
 model IssueVote {
@@ -506,13 +607,16 @@ model CareerOpportunity {
   applicationUrl String?
   deadline DateTime?
   status String @default("OPEN")
+  postedById String? @db.ObjectId
   company Company? @relation(fields: [companyId], references: [id])
+  postedBy User? @relation("OpportunityPoster", fields: [postedById], references: [id])
   saves OpportunitySave[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([status, createdAt])
   @@index([companyId, status])
   @@index([employmentType, status])
+  @@index([postedById, createdAt])
 }
 
 model OpportunitySave {

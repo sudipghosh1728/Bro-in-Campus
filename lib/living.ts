@@ -1,5 +1,6 @@
 import { ApiError } from "./api";
 import type { CurrentUser } from "./auth";
+import { assessPublicContent } from "./content-safety";
 import { IssueManagerProfessions, NotificationType } from "./domain";
 import { prisma } from "./prisma";
 import { publishPublic, publishUser } from "./realtime";
@@ -33,12 +34,12 @@ function marketSummary(market: {
 
 function issueSummary(issue: {
   id: string; title: string; description: string; category: string; severity: string; location: string | null; status: string; resolvedAt: Date | null; createdAt: Date; updatedAt: Date;
-  reporter: { id: string; name: string; username: string; profile: { avatarUrl: string | null } | null }; votes: { userId: string }[]; _count: { votes: number };
+  votes: { userId: string }[]; _count: { votes: number };
 }) {
   return {
     id: issue.id, title: issue.title, description: issue.description, category: issue.category, severity: issue.severity, location: issue.location, status: issue.status,
     createdAt: issue.createdAt.toISOString(), updatedAt: issue.updatedAt.toISOString(), resolvedAt: issue.resolvedAt?.toISOString() ?? null, voteCount: issue._count.votes, supported: issue.votes.length > 0,
-    reporter: { id: issue.reporter.id, name: issue.reporter.name, username: issue.reporter.username, avatarUrl: issue.reporter.profile?.avatarUrl ?? null },
+    reporter: { name: "Anonymous campus member" },
   };
 }
 
@@ -51,11 +52,12 @@ export async function getResidenceLivingData(collegeId: string, viewer: Viewer) 
       include: { produce: { orderBy: { verifiedAt: "desc" }, take: 16, include: { reportedBy: { select: { name: true } } } } },
     }),
     prisma.communityIssue.findMany({
-      where: { collegeId },
+      // Existing documents predate moderationStatus. Keep those visible while
+      // ensuring a removed item can never return to the public board.
+      where: { collegeId, OR: [{ moderationStatus: "APPROVED" }, { moderationStatus: { isSet: false } }] },
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
       take: 40,
       include: {
-        reporter: { select: { id: true, name: true, username: true, profile: { select: { avatarUrl: true } } } },
         votes: viewer ? { where: { userId: viewer.id }, select: { userId: true } } : { take: 0, select: { userId: true } },
         _count: { select: { votes: true } },
       },
@@ -131,8 +133,17 @@ export async function createCommunityIssue(user: CurrentUser, collegeId: string,
   await membershipFor(user.id, collegeId);
   const college = await prisma.college.findUnique({ where: { id: collegeId }, select: { slug: true } });
   if (!college) throw new ApiError(404, "NOT_FOUND", "Campus not found.");
+  const safety = assessPublicContent([input.title, input.description, input.location]);
+  if (!safety.allowed) {
+    // Do not store rejected text. The audit entry is enough to monitor the
+    // filter without persisting potentially unsafe material.
+    await prisma.contentModeration.create({
+      data: { userId: user.id, contentType: "COMMUNITY_ISSUE", decision: "BLOCKED", categories: safety.categories },
+    });
+    throw new ApiError(422, "CONTENT_BLOCKED", "This submission was blocked by the community safety policy and was not published.");
+  }
   const { issue, managerIds } = await prisma.$transaction(async (tx) => {
-    const created = await tx.communityIssue.create({ data: { collegeId, reporterId: user.id, title: input.title, description: input.description, category: input.category, severity: input.severity, location: input.location || null } });
+    const created = await tx.communityIssue.create({ data: { collegeId, reporterId: user.id, title: input.title, description: input.description, category: input.category, severity: input.severity, location: input.location || null, isAnonymous: true, moderationStatus: "APPROVED" } });
     const managers = await tx.collegeMembership.findMany({
       where: {
         collegeId,
@@ -144,7 +155,7 @@ export async function createCommunityIssue(user: CurrentUser, collegeId: string,
       select: { userId: true },
     });
     const managerIds = [...new Set(managers.map((manager) => manager.userId).filter((id) => id !== user.id))];
-    if (managerIds.length) await tx.notification.createMany({ data: managerIds.map((userId) => ({ userId, actorId: user.id, type: NotificationType.CAMPUS_ISSUE_REPORTED, entityId: college.slug, message: `${user.name} reported “${input.title}” in a campus you manage.` })) });
+    if (managerIds.length) await tx.notification.createMany({ data: managerIds.map((userId) => ({ userId, actorId: null, type: NotificationType.CAMPUS_ISSUE_REPORTED, entityId: college.slug, message: "An anonymous campus issue needs attention in a campus you manage." })) });
     return { issue: created, managerIds };
   });
   managerIds.forEach((userId) => publishUser(userId, { type: "NOTIFICATION_CREATED", payload: { entityId: college.slug } }));
@@ -166,7 +177,7 @@ export async function resolveCommunityIssue(user: CurrentUser, issueId: string) 
   const resolvedAt = new Date();
   const updated = issue.status === "RESOLVED" ? await prisma.communityIssue.findUniqueOrThrow({ where: { id: issue.id }, select: { id: true, status: true, resolvedAt: true } }) : await prisma.communityIssue.update({ where: { id: issue.id }, data: { status: "RESOLVED", resolvedById: user.id, resolvedAt }, select: { id: true, status: true, resolvedAt: true } });
   if (issue.reporterId !== user.id && issue.status !== "RESOLVED") {
-    await prisma.notification.create({ data: { userId: issue.reporterId, actorId: user.id, type: NotificationType.CAMPUS_ISSUE_RESOLVED, entityId: issue.college.slug, message: `${user.name} marked your campus issue “${issue.title}” as done.` } });
+    await prisma.notification.create({ data: { userId: issue.reporterId, actorId: user.id, type: NotificationType.CAMPUS_ISSUE_RESOLVED, entityId: issue.college.slug, message: "A campus manager marked your anonymous issue as done." } });
     publishUser(issue.reporterId, { type: "NOTIFICATION_CREATED", payload: { entityId: issue.college.slug } });
   }
   publishPublic({ type: "ISSUE_RESOLVED", payload: { collegeId: issue.collegeId, issueId } });

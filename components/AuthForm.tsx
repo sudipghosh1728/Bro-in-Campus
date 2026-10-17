@@ -49,7 +49,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} minLength={3} maxLength={30} required placeholder="e.g. ananya_s" /></label>
             <label>Profession
               <select value={form.profession} onChange={(event) => setForm({ ...form, profession: event.target.value })}>
-                <option value="STUDENT">Student</option><option value="TEACHER">Teacher / faculty</option><option value="AUTHORITY">Campus authority</option><option value="ADMINISTRATION">Administration</option><option value="RESIDENT">Resident / community member</option>
+                <option value="STUDENT">Student</option><option value="TEACHER">Teacher / faculty</option><option value="AUTHORITY">Campus authority</option><option value="ADMINISTRATION">Administration</option><option value="HR">HR / employer</option><option value="RESIDENT">Resident / community member</option>
               </select>
               <small>Teachers, authorities and administrators receive reports from campuses they join.</small>
             </label>
