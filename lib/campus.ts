@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { assessPublicContent } from "./content-safety";
+import { assessPublicContent, requireSafePublicContent } from "./content-safety";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { publishPublic } from "./realtime";
@@ -158,6 +158,7 @@ export async function getCompanyProfile(slug: string, viewer: Viewer) {
 export async function createCompanyReview(user: CurrentUser, companyId: string, input: { rating: number; title: string; pros: string; cons?: string; role?: string; isAnonymous?: boolean }) {
   const company = await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } });
   if (!company) throw new ApiError(404, "NOT_FOUND", "Company not found.");
+  await requireSafePublicContent(user.id, "COMPANY_REVIEW", [input.title, input.pros, input.cons, input.role]);
   const review = await prisma.companyReview.create({ data: { ...input, cons: input.cons || null, role: input.role || null, isAnonymous: input.isAnonymous ?? false, companyId, authorId: user.id } });
   return { id: review.id };
 }

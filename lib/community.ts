@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { ApiError } from "./api";
+import { requireSafePublicContent } from "./content-safety";
 import { prisma } from "./prisma";
 import { publishPublic, publishUser } from "./realtime";
 import { uniqueQuestionSlug } from "./slug";
@@ -165,6 +166,7 @@ export async function getQuestionBySlug(slug: string, viewer: Viewer) {
 }
 
 export async function createQuestion(user: CurrentUser, input: { title: string; body: string; topicIds: string[] }) {
+  await requireSafePublicContent(user.id, "QUESTION", [input.title, input.body]);
   const topicCount = await prisma.topic.count({ where: { id: { in: input.topicIds } } });
   if (topicCount !== input.topicIds.length) throw new ApiError(422, "INVALID_TOPIC", "One or more selected topics do not exist.");
   const slug = await uniqueQuestionSlug(input.title);
@@ -181,6 +183,7 @@ export async function updateQuestion(user: CurrentUser, questionId: string, inpu
   const question = await prisma.question.findUnique({ where: { id: questionId }, select: { authorId: true, status: true } });
   if (!question || question.status === ContentStatus.DELETED) throw new ApiError(404, "NOT_FOUND", "Question not found.");
   if (question.authorId !== user.id && user.role !== Role.MODERATOR && user.role !== Role.ADMIN) throw new ApiError(403, "FORBIDDEN", "You cannot edit this question.");
+  await requireSafePublicContent(user.id, "QUESTION", [input.title, input.body]);
   if (input.topicIds) {
     const topicCount = await prisma.topic.count({ where: { id: { in: input.topicIds } } });
     if (topicCount !== input.topicIds.length) throw new ApiError(422, "INVALID_TOPIC", "One or more selected topics do not exist.");
@@ -202,6 +205,7 @@ export async function deleteQuestion(user: CurrentUser, questionId: string) {
 }
 
 export async function createAnswer(user: CurrentUser, questionId: string, body: string) {
+  await requireSafePublicContent(user.id, "ANSWER", [body]);
   const question = await prisma.question.findFirst({ where: { AND: [{ id: questionId }, publicQuestionWhere] }, select: { id: true, slug: true, authorId: true, title: true } });
   if (!question) throw new ApiError(404, "NOT_FOUND", "Question not found.");
   const answer = await prisma.$transaction(async (tx) => {
@@ -221,6 +225,7 @@ export async function updateAnswer(user: CurrentUser, answerId: string, body: st
   const answer = await prisma.answer.findUnique({ where: { id: answerId }, select: { authorId: true, questionId: true } });
   if (!answer) throw new ApiError(404, "NOT_FOUND", "Answer not found.");
   if (answer.authorId !== user.id && user.role !== Role.MODERATOR && user.role !== Role.ADMIN) throw new ApiError(403, "FORBIDDEN", "You cannot edit this answer.");
+  await requireSafePublicContent(user.id, "ANSWER", [body]);
   const updated = await prisma.answer.update({ where: { id: answerId }, data: { body }, select: { id: true, questionId: true } });
   publishPublic({ type: "ANSWER_UPDATED", payload: { questionId: updated.questionId, answerId } });
   return updated;
@@ -269,6 +274,7 @@ export async function toggleAnswerVote(user: CurrentUser, answerId: string, shou
 }
 
 export async function createComment(user: CurrentUser, target: { questionId?: string; answerId?: string }, body: string, parentId?: string) {
+  await requireSafePublicContent(user.id, "COMMENT", [body]);
   if (!target.questionId && !target.answerId) throw new ApiError(422, "INVALID_TARGET", "Choose content to comment on.");
   const [question, answer, parent] = await Promise.all([
     target.questionId ? prisma.question.findFirst({ where: { AND: [{ id: target.questionId }, publicQuestionWhere] }, select: { id: true, authorId: true, title: true } }) : null,
@@ -294,6 +300,7 @@ export async function updateComment(user: CurrentUser, commentId: string, body: 
   const comment = await prisma.comment.findUnique({ where: { id: commentId }, select: { authorId: true } });
   if (!comment) throw new ApiError(404, "NOT_FOUND", "Comment not found.");
   if (comment.authorId !== user.id && user.role !== Role.MODERATOR && user.role !== Role.ADMIN) throw new ApiError(403, "FORBIDDEN", "You cannot edit this comment.");
+  await requireSafePublicContent(user.id, "COMMENT", [body]);
   return prisma.comment.update({ where: { id: commentId }, data: { body }, select: { id: true, body: true, updatedAt: true } });
 }
 

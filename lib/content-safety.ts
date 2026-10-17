@@ -1,3 +1,6 @@
+import { ApiError } from "./api";
+import { prisma } from "./prisma";
+
 export type SafetyCategory = "EXPLICIT_SEXUAL_CONTENT" | "TERRORISM_OR_EXTREMISM";
 
 export type ContentSafetyDecision =
@@ -37,4 +40,12 @@ export function assessPublicContent(values: Array<string | null | undefined>): C
   const categories = [...new Set(blockedPatterns.filter(({ pattern }) => pattern.test(content)).map(({ category }) => category))];
 
   return categories.length ? { allowed: false, categories } : { allowed: true, categories: [] };
+}
+export async function requireSafePublicContent(userId: string, contentType: string, values: Array<string | null | undefined>) {
+  const decision = assessPublicContent(values);
+  if (decision.allowed) return;
+  // Preserve a category-only audit trail. The rejected text is deliberately
+  // never written to the database.
+  await prisma.contentModeration.create({ data: { userId, contentType, decision: "BLOCKED", categories: decision.categories } });
+  throw new ApiError(422, "CONTENT_BLOCKED", "This submission was blocked by the community safety policy and was not published.");
 }
