@@ -4,6 +4,8 @@ import { getRequestUser, requireUser } from "@/lib/auth";
 import { createCollege, getCollegeDirectory } from "@/lib/colleges";
 import { collegeSchema } from "@/lib/validation";
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getRequestUser(request);

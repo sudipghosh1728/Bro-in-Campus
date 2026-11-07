@@ -17,7 +17,7 @@ export function PlatformHeader({ user }: { user: Viewer }) {
   useEffect(() => {
     if (!user) return;
     const load = async () => {
-      const response = await fetch("/api/notifications");
+      const response = await fetch("/api/notifications?count=1");
       if (response.ok) setUnread((await response.json()).data.unreadCount);
     };
     load();

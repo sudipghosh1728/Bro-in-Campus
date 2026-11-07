@@ -1,8 +1,15 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { DM_Mono, DM_Sans, Playfair_Display } from "next/font/google";
 import "./globals.css";
-import { getCurrentUser } from "@/lib/auth";
+import "./community.css";
+import { getCurrentImpersonation, getCurrentUser } from "@/lib/auth";
 import { PlatformHeader } from "@/components/PlatformHeader";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
+
+const sans = DM_Sans({ subsets: ["latin"], display: "swap", variable: "--font-dm-sans" });
+const mono = DM_Mono({ subsets: ["latin"], weight: ["400", "500"], display: "swap", preload: false, variable: "--font-dm-mono" });
+const serif = Playfair_Display({ subsets: ["latin"], style: ["normal", "italic"], display: "swap", preload: false, variable: "--font-playfair" });
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +28,11 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const currentUser = await getCurrentUser().catch(() => null);
+  const [currentUser, impersonation] = await Promise.all([getCurrentUser().catch(() => null), getCurrentImpersonation().catch(() => null)]);
   const user = currentUser ? { id: currentUser.id, name: currentUser.name, username: currentUser.username, role: currentUser.role, avatarUrl: currentUser.profile?.avatarUrl ?? null, profession: currentUser.profile?.profession ?? null } : null;
   return (
-    <html lang="en-IN">
-      <body><PlatformHeader user={user} />{children}</body>
+    <html lang="en-IN" className={`${sans.variable} ${mono.variable} ${serif.variable}`}>
+      <body><PlatformHeader user={user} />{impersonation && <ImpersonationBanner adminName={impersonation.adminName} targetName={impersonation.targetName} />}{children}</body>
     </html>
   );
 }

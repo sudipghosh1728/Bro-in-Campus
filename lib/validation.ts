@@ -113,6 +113,10 @@ export const newsletterSubscriptionSchema = z.object({
   interests: z.array(z.enum(["EDUCATION", "ECONOMY", "ENGINEERING", "TECHNOLOGY", "CAREERS", "SCHOLARSHIPS"])).max(6).default(["EDUCATION", "TECHNOLOGY", "CAREERS"]),
 });
 
+export const learningProgressSchema = z.object({
+  completedMilestones: z.array(z.string().regex(/^[a-f0-9]{24}$/)).max(100),
+}).strict();
+
 export const companyReviewSchema = z.object({
   rating: z.number().int().min(1).max(5),
   title: z.string().trim().min(8).max(160),
@@ -137,7 +141,17 @@ export const collegeSchema = z.object({
   residentLabel: z.string().trim().max(40).optional().or(z.literal("")),
   latitude: z.number().min(-90).max(90).optional().nullable(),
   longitude: z.number().min(-180).max(180).optional().nullable(),
+  departmentSlugs: z.array(z.string().trim().regex(/^[a-z0-9-]+$/).max(72)).max(12).optional().default([]),
 });
+
+export const adminCollegeCreateSchema = collegeSchema.extend({ verified: z.boolean().optional() });
+export const adminCollegeUpdateSchema = collegeSchema.partial().extend({
+  verified: z.boolean().optional(),
+}).strict().refine((input) => Object.keys(input).length > 0, "No college changes submitted.");
+
+export const collegeDepartmentsSchema = z.object({
+  departmentSlugs: z.array(z.string().trim().regex(/^[a-z0-9-]+$/).max(72)).max(12),
+}).strict();
 
 export const collegeMembershipSchema = z.object({
   course: z.string().trim().max(120).optional().or(z.literal("")),

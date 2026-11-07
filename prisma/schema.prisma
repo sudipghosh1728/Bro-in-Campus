@@ -42,6 +42,8 @@ model User {
   collegeMemberships CollegeMembership[]
   reportedIssues CommunityIssue[] @relation("IssueReporter")
   contentModerationEvents ContentModeration[]
+  learningPathProgress LearningPathProgress[]
+  campusDecisionVotes CampusDecisionVote[]
   issueVotes IssueVote[]
   produceReports ProduceListing[] @relation("ProduceReporter")
   questionVotes QuestionVote[]
@@ -94,6 +96,8 @@ model College {
   members CollegeMembership[]
   markets LocalMarket[]
   issues CommunityIssue[]
+  departmentLinks CollegeDepartment[]
+  decisions CampusDecision[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([city, createdAt])
@@ -193,9 +197,68 @@ model Department {
   focusAreas String[] @default([])
   accent String @default("indigo")
   demandSignal Int @default(0)
+  collegeLinks CollegeDepartment[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([demandSignal, name])
+}
+
+// Community evidence is separate from official employer listings. Accepted IDs
+// identify the last majority snapshot; a tie never silently replaces that snapshot.
+model CampusDecision {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  collegeId String @db.ObjectId
+  key String
+  kind String
+  title String
+  acceptedProposalId String? @db.ObjectId
+  acceptedAt DateTime?
+  revision Int @default(0)
+  college College @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  proposals CampusProposal[]
+  votes CampusDecisionVote[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([collegeId, key])
+  @@index([collegeId, updatedAt])
+}
+
+model CampusProposal {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  decisionId String @db.ObjectId
+  fingerprint String
+  payload Json
+  decision CampusDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  votes CampusDecisionVote[]
+  createdAt DateTime @default(now())
+  @@unique([decisionId, fingerprint])
+}
+
+model CampusDecisionVote {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  decisionId String @db.ObjectId
+  proposalId String @db.ObjectId
+  userId String @db.ObjectId
+  decision CampusDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  proposal CampusProposal @relation(fields: [proposalId], references: [id], onDelete: NoAction)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+  @@unique([decisionId, userId])
+  @@index([proposalId])
+  @@index([userId])
+}
+
+// A college can expose the department clusters it actually supports without
+// duplicating curriculum records for every campus.
+model CollegeDepartment {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  collegeId String @db.ObjectId
+  departmentId String @db.ObjectId
+  college College @relation(fields: [collegeId], references: [id])
+  department Department @relation(fields: [departmentId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([collegeId, departmentId])
+  @@index([departmentId, collegeId])
 }
 
 model LearningPath {
@@ -210,10 +273,30 @@ model LearningPath {
   milestones Json
   trendScore Int @default(0)
   featured Boolean @default(false)
+  progressRecords LearningPathProgress[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([departmentSlug, trendScore])
   @@index([featured, trendScore])
+}
+
+// Each student controls their own roadmap state. Progress is intentionally
+// simple, making it useful for self-directed learning rather than pretending
+// to certify completion.
+model LearningPathProgress {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  learningPathId String @db.ObjectId
+  progress Int @default(0)
+  completedMilestones String[] @default([])
+  startedAt DateTime @default(now())
+  completedAt DateTime?
+  user User @relation(fields: [userId], references: [id])
+  learningPath LearningPath @relation(fields: [learningPathId], references: [id])
+  updatedAt DateTime @updatedAt
+  @@unique([userId, learningPathId])
+  @@index([userId, updatedAt])
+  @@index([learningPathId, progress])
 }
 
 model Scholarship {
@@ -628,4 +711,19 @@ model OpportunitySave {
   createdAt DateTime @default(now())
   @@unique([userId, opportunityId])
   @@index([opportunityId])
+}
+
+model AdminImpersonation {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+  adminId String @db.ObjectId
+  targetId String @db.ObjectId
+  sessionId String @unique @db.ObjectId
+  adminEmail String
+  targetEmail String
+  ipAddress String?
+  userAgent String?
+  startedAt DateTime @default(now())
+  endedAt DateTime?
+  @@index([adminId, startedAt])
+  @@index([targetId, startedAt])
 }

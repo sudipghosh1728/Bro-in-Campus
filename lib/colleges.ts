@@ -1,13 +1,21 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { ApiError } from "./api";
 import type { CurrentUser } from "./auth";
-import { Profession } from "./domain";
+import { Profession, Role } from "./domain";
 import { prisma } from "./prisma";
 import { publishPublic } from "./realtime";
+import { academicPlaceTypes } from "./growth-types";
 
 type Viewer = Pick<CurrentUser, "id"> | null;
 
 const colors = ["indigo", "violet", "mint", "coral", "yellow"];
+
+export function getDepartmentCatalog() {
+  return prisma.department.findMany({
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, slug: true, focusAreas: true, accent: true },
+  });
+}
 
 function membershipRoleFor(user: CurrentUser) {
   const profession = user.profile?.profession;
@@ -91,6 +99,7 @@ export async function getCollegeDetail(slug: string, viewer: Viewer) {
     where: { slug },
     include: {
       listedBy: { select: { id: true, name: true, username: true } },
+      departmentLinks: { include: { department: { select: { id: true, name: true, slug: true, focusAreas: true, accent: true } } }, orderBy: { createdAt: "asc" } },
       _count: { select: { members: true } },
       members: {
         orderBy: [{ verified: "desc" }, { createdAt: "desc" }],
@@ -114,6 +123,7 @@ export async function getCollegeDetail(slug: string, viewer: Viewer) {
     ...collegeSummary({ ...college, members: joined ? [{ userId: viewer!.id }] : [] }),
     joined,
     listedBy: college.listedBy,
+    departments: college.departmentLinks.map(({ department }) => department),
     students: college.members.map((member) => ({
       id: member.user.id,
       name: member.user.name,
@@ -172,12 +182,16 @@ export async function getStudentDirectory(viewer: Viewer, options: { q?: string;
   };
 }
 
-export async function createCollege(user: CurrentUser, input: { name: string; city: string; state?: string; country?: string; type?: string; website?: string; description?: string; aisheCode?: string; coverColor?: string; address?: string; buildingCount?: number | null; residentLabel?: string; latitude?: number | null; longitude?: number | null }) {
+export async function createCollege(user: CurrentUser, input: { name: string; city: string; state?: string; country?: string; type?: string; website?: string; description?: string; aisheCode?: string; coverColor?: string; address?: string; buildingCount?: number | null; residentLabel?: string; latitude?: number | null; longitude?: number | null; departmentSlugs?: string[]; verified?: boolean }) {
   if (input.aisheCode) {
     const existing = await prisma.college.findFirst({ where: { aisheCode: input.aisheCode }, select: { slug: true } });
     if (existing) throw new ApiError(409, "ALREADY_LISTED", "This AISHE institution already has a place listing.");
   }
   const slug = await availableSlug(input.name, input.city);
+  const departmentSlugs = [...new Set(input.departmentSlugs ?? [])];
+  if (departmentSlugs.length && !academicPlaceTypes.includes(input.type || "UNIVERSITY")) throw new ApiError(422, "NOT_ACADEMIC", "Academic groups are available for education listings only.");
+  const departments = departmentSlugs.length ? await prisma.department.findMany({ where: { slug: { in: departmentSlugs } }, select: { id: true } }) : [];
+  if (departments.length !== departmentSlugs.length) throw new ApiError(422, "INVALID_DEPARTMENT", "One or more selected departments do not exist.");
   const college = await prisma.$transaction(async (tx) => {
     const created = await tx.college.create({
       data: {
@@ -197,19 +211,48 @@ export async function createCollege(user: CurrentUser, input: { name: string; ci
         latitude: input.latitude ?? null,
         longitude: input.longitude ?? null,
         coverColor: input.coverColor || colors[0],
-        listedById: user.id,
+        verified: input.verified ?? false,
+        listedById: user.role === Role.ADMIN ? null : user.id,
       },
     });
-    await tx.collegeMembership.create({ data: { collegeId: created.id, userId: user.id, role: "LISTING_ADMIN", course: user.profile?.course || null } });
-    await tx.profile.upsert({
-      where: { userId: user.id },
-      create: { userId: user.id, college: created.name, course: user.profile?.course || null },
-      update: { college: created.name },
-    });
+    if (user.role !== Role.ADMIN) {
+      await tx.collegeMembership.create({ data: { collegeId: created.id, userId: user.id, role: "LISTING_ADMIN", course: user.profile?.course || null } });
+      await tx.profile.upsert({
+        where: { userId: user.id },
+        create: { userId: user.id, college: created.name, course: user.profile?.course || null },
+        update: { college: created.name },
+      });
+    }
+    if (departments.length) await tx.collegeDepartment.createMany({ data: departments.map((department) => ({ collegeId: created.id, departmentId: department.id })) });
     return created;
-  });
-  publishPublic({ type: "COLLEGE_MEMBERSHIP_CHANGED", payload: { collegeId: college.id, joined: true } });
+  }, { maxWait: 5000, timeout: 15000 });
+  if (user.role !== Role.ADMIN) publishPublic({ type: "COLLEGE_MEMBERSHIP_CHANGED", payload: { collegeId: college.id, joined: true } });
   return { id: college.id, slug: college.slug, name: college.name };
+}
+
+export async function updateCollegeDepartments(user: CurrentUser, collegeId: string, departmentSlugs: string[]) {
+  const college = await prisma.college.findUnique({ where: { id: collegeId }, select: { id: true, listedById: true, type: true } });
+  if (!college) throw new ApiError(404, "NOT_FOUND", "Campus not found.");
+  if (college.listedById !== user.id && user.role !== "ADMIN" && user.role !== "MODERATOR") throw new ApiError(403, "FORBIDDEN", "Only the listing owner or a platform moderator can update these groups.");
+  if (!academicPlaceTypes.includes(college.type)) throw new ApiError(422, "NOT_ACADEMIC", "Academic groups are available for education listings only.");
+  const slugs = [...new Set(departmentSlugs)];
+  const departments = slugs.length ? await prisma.department.findMany({ where: { slug: { in: slugs } }, select: { id: true, name: true, slug: true, focusAreas: true, accent: true } }) : [];
+  if (departments.length !== slugs.length) throw new ApiError(422, "INVALID_DEPARTMENT", "One or more selected departments do not exist.");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Touch the parent even for an empty selection, serializing concurrent replacements.
+        await tx.college.update({ where: { id: collegeId }, data: { updatedAt: new Date() } });
+        await tx.collegeDepartment.deleteMany({ where: { collegeId } });
+        if (departments.length) await tx.collegeDepartment.createMany({ data: departments.map((department) => ({ collegeId, departmentId: department.id })) });
+      }, { maxWait: 5000, timeout: 15000 });
+      break;
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2034") throw error;
+      if (attempt === 2) throw new ApiError(409, "DEPARTMENT_CONFLICT", "Another department update is in progress. Please try again.");
+    }
+  }
+  return { departments };
 }
 
 export async function joinCollege(user: CurrentUser, collegeId: string, input: { course?: string; graduationYear?: number | null }) {
@@ -241,9 +284,6 @@ export async function leaveCollege(user: CurrentUser, collegeId: string) {
 }
 
 export async function updateCollegeLocation(user: CurrentUser, collegeId: string, input: { latitude: number; longitude: number; address?: string }) {
-  const college = await prisma.college.findUnique({ where: { id: collegeId }, select: { id: true, listedById: true } });
-  if (!college) throw new ApiError(404, "NOT_FOUND", "Place not found.");
-  if (college.listedById !== user.id && user.role !== "ADMIN" && user.role !== "MODERATOR") throw new ApiError(403, "FORBIDDEN", "Only the person who listed this place can update its location.");
-  const updated = await prisma.college.update({ where: { id: collegeId }, data: { latitude: input.latitude, longitude: input.longitude, ...(input.address ? { address: input.address } : {}) }, select: { latitude: true, longitude: true, address: true } });
-  return updated;
+  // Older clients must not bypass the community review workflow.
+  throw new ApiError(409, "REVIEW_REQUIRED", "Use the campus consensus board to propose a location for members to review.");
 }

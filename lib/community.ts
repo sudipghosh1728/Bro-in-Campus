@@ -12,7 +12,6 @@ type QuestionCardRecord = {
   id: string; title: string; slug: string; body: string; viewCount: number; createdAt: Date; updatedAt: Date;
   author: { id: string; name: string; username: string; profile: { avatarUrl: string | null; college: string | null } | null };
   topics: { topic: { id: string; name: string; slug: string } }[];
-  answers: { _count: { votes: number } }[];
   _count: { answers: number; bookmarks: number; comments: number; votes: number };
   bookmarks: { userId: string }[];
   votes: { userId: string }[];
@@ -28,8 +27,7 @@ const rootCommentWhere: Prisma.CommentWhereInput = { AND: [publicCommentWhere, {
 const cardInclude = (viewerId?: string): Prisma.QuestionInclude => ({
   author: { select: { id: true, name: true, username: true, profile: { select: { avatarUrl: true, college: true } } } },
   topics: { include: { topic: { select: { id: true, name: true, slug: true } } } },
-  answers: { where: publicAnswerWhere, select: { _count: { select: { votes: true } } } },
-  _count: { select: { answers: true, bookmarks: true, comments: true, votes: true } },
+  _count: { select: { answers: { where: publicAnswerWhere }, bookmarks: true, comments: { where: publicCommentWhere }, votes: true } },
   bookmarks: viewerId ? { where: { userId: viewerId }, select: { userId: true } } : { take: 0, select: { userId: true } },
   votes: viewerId ? { where: { userId: viewerId }, select: { userId: true } } : { take: 0, select: { userId: true } },
 });
@@ -55,10 +53,57 @@ function questionCard(record: QuestionCardRecord, score?: number) {
   };
 }
 
-export type DiscoverFilters = { q?: string; topic?: string; sort?: "latest" | "trending" | "recommended"; cursor?: string; take?: number };
+export type DiscoverFilters = { q?: string; topic?: string; sort?: "latest" | "trending" | "recommended"; cursor?: string; take?: number; feedOnly?: boolean };
+
+async function getFeedPage(where: Prisma.QuestionWhereInput, filters: DiscoverFilters, take: number, viewerId?: string) {
+  const rows = await prisma.question.findMany({
+    where, take: take + 1,
+    ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
+    orderBy: filters.sort === "trending" ? [{ viewCount: "desc" }, { id: "desc" }] : [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true, title: true, slug: true, body: true, viewCount: true, createdAt: true, updatedAt: true, authorId: true,
+      _count: { select: { answers: { where: publicAnswerWhere }, bookmarks: true, comments: { where: publicCommentWhere }, votes: true } },
+    },
+  });
+  const visible = rows.slice(0, take);
+  const nextCursor = rows.length > take ? visible[visible.length - 1].id : null;
+  if (!visible.length) return { questions: [] as QuestionCardRecord[], nextCursor };
+  const ids = visible.map((row) => row.id);
+  const authorIds = [...new Set(visible.map((row) => row.authorId))];
+  // MongoDB nested includes otherwise fetch these branches sequentially. Batch
+  // each branch for the visible page and run independent reads concurrently.
+  // In particular, do not cache or load anyone else's likes/bookmarks.
+  const [authors, profiles, topicLinks, bookmarks, votes] = await Promise.all([
+    prisma.user.findMany({ where: { id: { in: authorIds } }, select: { id: true, name: true, username: true } }),
+    prisma.profile.findMany({ where: { userId: { in: authorIds } }, select: { userId: true, avatarUrl: true, college: true } }),
+    prisma.questionTopic.findMany({ where: { questionId: { in: ids } }, select: { questionId: true, topic: { select: { id: true, name: true, slug: true } } } }),
+    viewerId ? prisma.bookmark.findMany({ where: { questionId: { in: ids }, userId: viewerId }, select: { questionId: true } }) : Promise.resolve([]),
+    viewerId ? prisma.questionVote.findMany({ where: { questionId: { in: ids }, userId: viewerId }, select: { questionId: true } }) : Promise.resolve([]),
+  ]);
+  const authorsById = new Map(authors.map((author) => [author.id, author]));
+  const profilesById = new Map(profiles.map(({ userId, ...profile }) => [userId, profile]));
+  const topicsByQuestion = new Map<string, QuestionCardRecord["topics"]>();
+  for (const { questionId, topic } of topicLinks) {
+    const topics = topicsByQuestion.get(questionId) ?? [];
+    topics.push({ topic });
+    topicsByQuestion.set(questionId, topics);
+  }
+  const bookmarkedIds = new Set(bookmarks.map((item) => item.questionId));
+  const likedIds = new Set(votes.map((item) => item.questionId));
+  const questions: QuestionCardRecord[] = visible.flatMap((row) => {
+    const author = authorsById.get(row.authorId);
+    // An account can be removed between the page read and its author read.
+    if (!author) return [];
+    return [{ ...row, author: { ...author, profile: profilesById.get(author.id) ?? null }, topics: topicsByQuestion.get(row.id) ?? [],
+      bookmarks: viewerId && bookmarkedIds.has(row.id) ? [{ userId: viewerId }] : [],
+      votes: viewerId && likedIds.has(row.id) ? [{ userId: viewerId }] : [],
+    }];
+  });
+  return { questions, nextCursor };
+}
 
 export async function getDiscoverFeed(viewer: Viewer, filters: DiscoverFilters = {}) {
-  const take = Math.min(filters.take ?? 20, 50);
+  const take = Math.max(1, Math.min(filters.take ?? 20, 50));
   const conditions: Prisma.QuestionWhereInput[] = [publicQuestionWhere];
   if (filters.topic) conditions.push({ topics: { some: { topic: { slug: filters.topic } } } });
   if (filters.q) conditions.push({
@@ -70,39 +115,27 @@ export async function getDiscoverFeed(viewer: Viewer, filters: DiscoverFilters =
     });
   const where: Prisma.QuestionWhereInput = { AND: conditions };
 
-  const [questions, topics, recommendedUsers] = await Promise.all([
-    prisma.question.findMany({
-      where,
-      take: filters.sort === "recommended" ? 100 : take + 1,
-      ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
-      orderBy: filters.sort === "trending" ? { viewCount: "desc" } : { createdAt: "desc" },
-      include: cardInclude(viewer?.id),
-    }),
-    prisma.topic.findMany({ orderBy: { followers: { _count: "desc" } }, take: 12, include: { _count: { select: { followers: true, questions: true } }, followers: viewer ? { where: { userId: viewer.id }, select: { userId: true } } : { take: 0, select: { userId: true } } } }),
-    prisma.user.findMany({
+  const [page, topics, recommendedUsers, topicFollows, userFollows] = await Promise.all([
+    getFeedPage(where, filters, take, viewer?.id),
+    filters.feedOnly ? Promise.resolve([]) : prisma.topic.findMany({ orderBy: { followers: { _count: "desc" } }, take: 12, include: { _count: { select: { followers: true, questions: true } }, followers: viewer ? { where: { userId: viewer.id }, select: { userId: true } } : { take: 0, select: { userId: true } } } }),
+    filters.feedOnly ? Promise.resolve([]) : prisma.user.findMany({
       where: { isSuspended: false, ...(viewer ? { id: { not: viewer.id } } : {}) },
       orderBy: { questions: { _count: "desc" } },
       take: 5,
       select: { id: true, name: true, username: true, profile: { select: { avatarUrl: true, college: true } }, _count: { select: { followedBy: true } }, followedBy: viewer ? { where: { followerId: viewer.id }, select: { followerId: true } } : { take: 0, select: { followerId: true } } },
     }),
+    viewer && filters.sort === "recommended" ? prisma.topicFollow.findMany({ where: { userId: viewer.id }, select: { topicId: true } }) : Promise.resolve([]),
+    viewer && filters.sort === "recommended" ? prisma.userFollow.findMany({ where: { followerId: viewer.id }, select: { followingId: true } }) : Promise.resolve([]),
   ]);
 
-  let followingTopicIds = new Set<string>();
-  let followingUserIds = new Set<string>();
-  if (viewer) {
-    const [topicFollows, userFollows] = await Promise.all([
-      prisma.topicFollow.findMany({ where: { userId: viewer.id }, select: { topicId: true } }),
-      prisma.userFollow.findMany({ where: { followerId: viewer.id }, select: { followingId: true } }),
-    ]);
-    followingTopicIds = new Set(topicFollows.map((follow) => follow.topicId));
-    followingUserIds = new Set(userFollows.map((follow) => follow.followingId));
-  }
+  const followingTopicIds = new Set(topicFollows.map((follow) => follow.topicId));
+  const followingUserIds = new Set(userFollows.map((follow) => follow.followingId));
 
-  const withScores = (questions as unknown as QuestionCardRecord[]).map((question) => {
+  const withScores = page.questions.map((question) => {
     const ageHours = Math.max(0, (Date.now() - question.createdAt.getTime()) / 3_600_000);
     const topicBonus = question.topics.some(({ topic }) => followingTopicIds.has(topic.id)) ? 40 : 0;
     const authorBonus = followingUserIds.has(question.author.id) ? 32 : 0;
-    const engagement = (question.answers.reduce((sum, answer) => sum + answer._count.votes, 0) + question._count.votes) * 3 + question._count.answers * 5 + question._count.bookmarks * 2;
+    const engagement = question._count.votes * 3 + question._count.answers * 5 + question._count.bookmarks * 2;
     const freshness = Math.max(0, 32 - ageHours / 3);
     const unansweredBonus = question._count.answers === 0 ? 12 : 0;
     return questionCard(question, Math.round(topicBonus + authorBonus + engagement + freshness + unansweredBonus));
@@ -110,10 +143,9 @@ export async function getDiscoverFeed(viewer: Viewer, filters: DiscoverFilters =
 
   const sorted = filters.sort === "recommended" ? withScores.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)) : withScores;
   const visible = sorted.slice(0, take);
-  const hasMore = filters.sort === "recommended" ? questions.length > take : questions.length > take;
   return {
     questions: visible,
-    nextCursor: hasMore ? questions[Math.min(take, questions.length) - 1]?.id ?? null : null,
+    nextCursor: page.nextCursor,
     topics: topics.map((topic) => ({ id: topic.id, name: topic.name, slug: topic.slug, description: topic.description, questionCount: topic._count.questions, followerCount: topic._count.followers, following: topic.followers.length > 0 })),
     recommendedUsers: recommendedUsers.map((user) => ({ id: user.id, name: user.name, username: user.username, avatarUrl: user.profile?.avatarUrl ?? null, college: user.profile?.college ?? null, followerCount: user._count.followedBy, following: user.followedBy.length > 0 })),
   };
@@ -434,9 +466,24 @@ export async function searchCommunity(query: string, type: "all" | "questions" |
 
 export async function adminAnalytics() {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const [users, questions, answers, comments, reports, unreadReports, newUsers, newQuestions, recentReports] = await Promise.all([
-    prisma.user.count(), prisma.question.count({ where: publicQuestionWhere }), prisma.answer.count({ where: publicAnswerWhere }), prisma.comment.count({ where: publicCommentWhere }), prisma.report.count(), prisma.report.count({ where: { status: "OPEN" } }), prisma.user.count({ where: { createdAt: { gte: since } } }), prisma.question.count({ where: { AND: [publicQuestionWhere, { createdAt: { gte: since } }] } }),
-    prisma.report.findMany({ orderBy: { createdAt: "desc" }, take: 10, include: { reporter: { select: { name: true, username: true } } } }),
+  const [users, questions, answers, comments, unreadReports, newUsers, recentReports] = await Promise.all([
+    prisma.user.count(),
+    prisma.question.count({ where: publicQuestionWhere }),
+    prisma.answer.count({ where: publicAnswerWhere }),
+    prisma.comment.count({ where: publicCommentWhere }),
+    prisma.report.count({ where: { status: "OPEN" } }),
+    prisma.user.count({ where: { createdAt: { gte: since } } }),
+    prisma.report.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 30,
+      select: {
+        id: true, reason: true, status: true, questionId: true, answerId: true, commentId: true, createdAt: true,
+        reporter: { select: { name: true, username: true } },
+      },
+    }),
   ]);
-  return { metrics: { users, questions, answers, comments, reports, unreadReports, newUsers, newQuestions, engagement: answers + comments }, recentReports: recentReports.map((report) => ({ id: report.id, reason: report.reason, status: report.status, createdAt: report.createdAt.toISOString(), reporter: report.reporter })) };
+  return {
+    metrics: { users, questions, answers, comments, unreadReports, newUsers, engagement: answers + comments },
+    recentReports: recentReports.map((report) => ({ ...report, createdAt: report.createdAt.toISOString() })),
+  };
 }

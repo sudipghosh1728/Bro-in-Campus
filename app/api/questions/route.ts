@@ -9,8 +9,11 @@ export async function GET(request: NextRequest) {
     const params = request.nextUrl.searchParams;
     const user = await getRequestUser(request);
     const sort = params.get("sort");
-    const data = await getDiscoverFeed(user, { q: params.get("q") ?? undefined, topic: params.get("topic") ?? undefined, cursor: params.get("cursor") ?? undefined, take: pageSize(params.get("take")), sort: sort === "trending" || sort === "recommended" ? sort : "latest" });
-    return ok(data);
+    const data = await getDiscoverFeed(user, { q: params.get("q") ?? undefined, topic: params.get("topic") ?? undefined, cursor: params.get("cursor") ?? undefined, take: pageSize(params.get("take")), feedOnly: params.get("sidebar") === "0", sort: sort === "trending" || sort === "recommended" ? sort : "latest" });
+    const response = ok(data);
+    // Likes, bookmarks and recommendations are specific to the current viewer.
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
   } catch (error) {
     return fail(error);
   }

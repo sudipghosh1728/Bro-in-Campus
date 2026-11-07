@@ -1,39 +1,18 @@
 import { ApiError } from "./api";
 import type { CurrentUser } from "./auth";
 import { prisma } from "./prisma";
+import { learningMilestones, progressSummary, scoreForDepartment } from "./learning-paths";
 
 type Viewer = Pick<CurrentUser, "id" | "email" | "profile"> | null;
-type Milestone = { title: string; outcome: string };
 
-const departmentSignals: Record<string, string[]> = {
-  "computing-ai": ["computer", "software", "information technology", "it", "ai", "data", "electronics"],
-  "core-engineering": ["mechanical", "civil", "electrical", "chemical", "engineering"],
-  "business-commerce": ["business", "commerce", "management", "mba", "finance", "economics"],
-  "design-media": ["design", "architecture", "media", "animation", "fashion", "fine arts"],
-  "health-life-sciences": ["medical", "nursing", "pharmacy", "biotech", "biology", "life science"],
-  "humanities-law": ["law", "humanities", "political", "psychology", "sociology", "english"],
-  "science-research": ["physics", "mathematics", "statistics", "chemistry", "science"],
-};
-
-function scoreForDepartment(departmentSlug: string, profile: CurrentUser["profile"]) {
-  if (!profile) return 0;
-  const haystack = `${profile.course ?? ""} ${profile.interests.join(" ")}`.toLowerCase();
-  return (departmentSignals[departmentSlug] ?? []).reduce((score, signal) => score + (haystack.includes(signal) ? 3 : 0), 0);
-}
-
-function milestones(value: unknown): Milestone[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object" || !("title" in item) || !("outcome" in item)) return [];
-    const { title, outcome } = item as { title?: unknown; outcome?: unknown };
-    return typeof title === "string" && typeof outcome === "string" ? [{ title, outcome }] : [];
-  });
-}
-
-export async function getGrowthOverview(viewer: Viewer) {
+// This loader contains catalog data only. Account progress is deliberately kept
+// outside it so pages can cache the catalog without sharing private checklists.
+export async function loadGrowthCatalog() {
   const [departments, paths, scholarships, briefings] = await Promise.all([
     prisma.department.findMany({ orderBy: [{ demandSignal: "desc" }, { name: "asc" }] }),
-    prisma.learningPath.findMany({ orderBy: [{ featured: "desc" }, { trendScore: "desc" }], take: 18 }),
+    prisma.learningPath.findMany({
+      orderBy: [{ featured: "desc" }, { trendScore: "desc" }],
+    }),
     prisma.scholarship.findMany({
       where: { OR: [{ deadline: { gte: new Date() } }, { deadline: null }, { deadline: { isSet: false } }] },
       orderBy: [{ featured: "desc" }, { deadline: "asc" }],
@@ -41,20 +20,36 @@ export async function getGrowthOverview(viewer: Viewer) {
     }),
     prisma.newsBriefing.findMany({ orderBy: { publishedAt: "desc" }, take: 12 }),
   ]);
+  return {
+    departments: departments.map(({ id, name, slug, synopsis, focusAreas, accent, demandSignal }) => ({ id, name, slug, synopsis, focusAreas, accent, demandSignal })),
+    paths: paths.map(({ id, title, slug, departmentSlug, level, duration, description, skills, milestones, trendScore, featured }) => ({ id, title, slug, departmentSlug, level, duration, description, skills, milestones: learningMilestones(milestones), trendScore, featured })),
+    scholarships: scholarships.map(({ id, title, slug, provider, description, amount, eligibility, categories, applicationUrl, deadline, featured }) => ({ id, title, slug, provider, description, amount, eligibility, categories, applicationUrl, deadline: deadline?.toISOString() ?? null, featured })),
+    briefings: briefings.map(({ id, title, slug, summary, category, sourceName, sourceUrl, publishedAt, featured }) => ({ id, title, slug, summary, category, sourceName, sourceUrl, publishedAt: publishedAt.toISOString(), featured })),
+  };
+}
+
+export async function getGrowthOverview(viewer: Viewer, catalogPromise = loadGrowthCatalog()) {
+  const [{ departments, paths, scholarships, briefings }, progressRecords] = await Promise.all([
+    catalogPromise,
+    viewer ? prisma.learningPathProgress.findMany({ where: { userId: viewer.id } }) : Promise.resolve([]),
+  ]);
+  const progressByPath = new Map(progressRecords.map((record) => [record.learningPathId, record]));
   const rankedPaths = paths
     .map((path) => ({ ...path, fitScore: scoreForDepartment(path.departmentSlug, viewer?.profile ?? null) }))
     .sort((left, right) => right.fitScore - left.fitScore || Number(right.featured) - Number(left.featured) || right.trendScore - left.trendScore);
-  const hasProfileSignal = Boolean(viewer?.profile?.course || viewer?.profile?.interests.length);
+  const hasProfileSignal = rankedPaths.some((path) => path.fitScore > 0);
 
   return {
-    recommendationLabel: hasProfileSignal ? `Matched to ${viewer?.profile?.course || "your interests"}` : "Popular across student communities",
-    departments: departments.map((department) => ({ id: department.id, name: department.name, slug: department.slug, synopsis: department.synopsis, focusAreas: department.focusAreas, accent: department.accent, demandSignal: department.demandSignal })),
+    recommendationLabel: hasProfileSignal ? "Matched to your course and interests" : "Explore the curated learning collection",
+    departments,
     paths: rankedPaths.map((path) => ({
       id: path.id, title: path.title, slug: path.slug, departmentSlug: path.departmentSlug, level: path.level, duration: path.duration,
-      description: path.description, skills: path.skills, milestones: milestones(path.milestones), trendScore: path.trendScore, featured: path.featured, fitScore: path.fitScore,
+      description: path.description, skills: path.skills, milestones: path.milestones, fitScore: path.fitScore,
+      progress: viewer ? progressSummary(progressByPath.get(path.id) ?? null, path.milestones) : null,
     })),
-    scholarships: scholarships.map((scholarship) => ({ ...scholarship, deadline: scholarship.deadline?.toISOString() ?? null })),
-    briefings: briefings.map((briefing) => ({ ...briefing, publishedAt: briefing.publishedAt.toISOString() })),
+    // A cached listing must still disappear immediately after its deadline.
+    scholarships: scholarships.filter((item) => !item.deadline || new Date(item.deadline) >= new Date()),
+    briefings,
   };
 }
 

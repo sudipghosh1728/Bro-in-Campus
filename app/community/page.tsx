@@ -3,6 +3,13 @@ import { DiscoverClient } from "@/components/DiscoverClient";
 import { getCurrentUser } from "@/lib/auth";
 import { getDiscoverFeed } from "@/lib/community";
 
+export const metadata = {
+  title: "Campus conversations and student channels",
+  description: "Join useful student conversations, explore topic channels and connect with your campus community on Bro in Campus.",
+  alternates: { canonical: "/community" },
+  openGraph: { title: "Campus conversations | Bro in Campus", url: "/community" },
+};
+
 export default async function CommunityPage({ searchParams }: { searchParams: Promise<{ q?: string; topic?: string; sort?: string; focus?: string }> }) {
   try {
     const params = await searchParams;
